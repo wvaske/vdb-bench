@@ -33,8 +33,16 @@ The benchmark process consists of three main steps:
 3. Running the benchmark queries
 
 ### Step 1: Load Vectors into the Database
-Use the load_vdb.py script to generate and load vectors into your vector database:
-`python -m vdbbench.load_vdb --config configs/10m.yaml`
+Use the load_vdb.py script to generate and load 10 million vectors into your vector database: (this process can take up to 8 hours)
+```bash
+python load_vdb.py --config configs/10m.yaml
+```
+
+
+For testing, I recommend using a smaller data by passing the num_vectors option:
+```bash
+python load_vdb.py --config configs/10m.yaml --collection_name mlps_500k_10shards_1536dim_uniform --num_vectors 500000
+```
 
 Key parameters:
 * --collection-name: Name of the collection to create
@@ -74,16 +82,16 @@ workflow:
 ```
 
 ### Step 2: Monitor and Compact the Database
-The compact_and_watch.py script monitors the database and performs compaction:
+The compact_and_watch.py script monitors the database and performs compaction. You should only need this if the load process exits out while waiting. The load script will do compaction and will wait for it to complete.
 ```bash
-python -m vdbbench.compact_and_watch --config configs/10m.yaml --interval 5
+python compact_and_watch.py --config configs/10m.yaml --interval 5
 ```
 This step is automatically performed at the end of the loading process if you set compact: true in your configuration.
 
 ### Step 3: Run the Benchmark
 Finally, run the benchmark using the simple_bench.py script:
 ```bash
-python -m vdbbench.simple_bench --config configs/10m.yaml --processes <N> --batch-size <batch_size>
+python simple_bench.py --host 127.0.0.1 --collection <collection_name> --processes <N> --batch-size <batch_size> --runtime <length of benchmark run in seconds>
 ```
 
 ## Supported Databases
