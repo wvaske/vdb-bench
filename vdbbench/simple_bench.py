@@ -12,6 +12,7 @@ import numpy as np
 import os
 import time
 import json
+import csv
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -19,14 +20,29 @@ from typing import Dict, List, Any, Optional, Tuple
 import signal
 import sys
 
+from vdbbench.config_loader import load_config, merge_config_with_args
+
 try:
     from pymilvus import connections, Collection
 except ImportError:
     print("Error: pymilvus package not found. Please install it with 'pip install pymilvus'")
     sys.exit(1)
 
+STAGGER_INTERVAL_SEC = 0.1
+
 # Global flag for graceful shutdown
 shutdown_flag = mp.Value('i', 0)
+
+# CSV header fields
+csv_fields = [
+    "process_id",
+    "batch_id",
+    "timestamp",
+    "batch_size",
+    "batch_time_seconds",
+    "avg_query_time_seconds",
+    "success"
+]
 
 
 def signal_handler(sig, frame):
@@ -116,19 +132,9 @@ def connect_to_milvus(host: str, port: str) -> bool:
         return False
 
 
-def execute_batch_queries(
-        process_id: int,
-        host: str,
-        port: str,
-        collection_name: str,
-        vector_dim: int,
-        batch_size: int,
-        report_count: int,
-        max_queries: Optional[int],
-        runtime_seconds: Optional[int],
-        output_dir: str,
-        shutdown_flag: mp.Value
-) -> None:
+def execute_batch_queries(process_id: int, host: str, port: str, collection_name: str, vector_dim: int, batch_size: int,
+                          report_count: int, max_queries: Optional[int], runtime_seconds: Optional[int], output_dir: str,
+                          shutdown_flag: mp.Value) -> None:
     """
     Execute batches of vector queries and log results to disk
 
@@ -157,8 +163,7 @@ def execute_batch_queries(
         return
 
     # Prepare output file
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_file = Path(output_dir) / f"milvus_benchmark_p{process_id}_{timestamp}.jsonl"
+    output_file = Path(output_dir) / f"milvus_benchmark_p{process_id}.csv"
 
     # Create output directory if it doesn't exist
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
@@ -172,6 +177,9 @@ def execute_batch_queries(
 
     try:
         with open(output_file, 'w') as f:
+            writer = csv.DictWriter(f, fieldnames=csv_fields)
+            writer.writeheader()
+
             while True:
                 # Check if we should terminate
                 with shutdown_flag.get_lock():
@@ -225,7 +233,7 @@ def execute_batch_queries(
                     "success": batch_success
                 }
 
-                f.write(json.dumps(batch_data) + "\n")
+                writer.writerow(batch_data)
                 f.flush()  # Ensure data is written to disk immediately
 
                 # Print progress
@@ -248,45 +256,50 @@ def execute_batch_queries(
 
 def calculate_statistics(results_dir: str) -> Dict[str, float]:
     """Calculate statistics from benchmark results"""
+    import pandas as pd
+    
+    # Find all result files
+    file_paths = list(Path(results_dir).glob("milvus_benchmark_p*.csv"))
+    
+    if not file_paths:
+        return {"error": "No benchmark result files found"}
+    
+    # Read and concatenate all CSV files into a single DataFrame
+    dfs = []
+    for file_path in file_paths:
+        try:
+            df = pd.read_csv(file_path)
+            if not df.empty:
+                dfs.append(df)
+        except Exception as e:
+            print(f"Error reading result file {file_path}: {e}")
+    
+    if not dfs:
+        return {"error": "No valid data found in benchmark result files"}
+    
+    # Concatenate all dataframes
+    all_data = pd.concat(dfs, ignore_index=True)
+    all_data.sort_values('timestamp', inplace=True)
+
+    # Calculate start and end times
+    file_start_time = all_data['timestamp'].min()
+    file_end_time = (all_data.tail(1)['timestamp'] + all_data.tail(1)['batch_time_seconds']).max()
+    total_time_seconds = file_end_time - file_start_time
+
+    # Each row represents a batch, so we need to expand based on batch_size
     all_latencies = []
-    all_batch_times = []
-    file_start_times = []
-    file_end_times = []
-
-    # Read all result files
-    for file_path in Path(results_dir).glob("milvus_benchmark_*.jsonl"):
-        with open(file_path, 'r') as f:
-            lines = f.readlines()
-            for i, line in enumerate(lines):
-                try:
-                    data = json.loads(line)
-                    if data["success"]:
-                        if i == 0:
-                            file_start_times.append(data["timestamp"])
-                        if i == len(lines) - 1:
-                            file_end_times.append(data["timestamp"] + data["batch_time_seconds"])
-
-                        # Convert to milliseconds for readability
-                        query_time_ms = data["avg_query_time_seconds"] * 1000
-                        start_time = data["timestamp"]
-                        # Add each query in the batch individually
-                        all_latencies.extend([query_time_ms] * data["batch_size"])
-
-                        # Store batch time in milliseconds
-                        batch_time_ms = data["batch_time_seconds"] * 1000
-                        all_batch_times.append(batch_time_ms)
-                except Exception as e:
-                    print(f"Error parsing result file {file_path}: {e}")
-
-    if not all_latencies:
-        return {"error": "No valid query results found"}
-
+    for _, row in all_data.iterrows():
+        query_time_ms = row['avg_query_time_seconds'] * 1000
+        all_latencies.extend([query_time_ms] * row['batch_size'])
+    
+    # Convert batch times to milliseconds
+    batch_times_ms = all_data['batch_time_seconds'] * 1000
+    
     # Calculate statistics
     latencies = np.array(all_latencies)
-    batch_times = np.array(all_batch_times)
+    batch_times = np.array(batch_times_ms)
     total_queries = len(latencies)
-    total_time_seconds = max(file_end_times) - min(file_start_times)
-
+    
     stats = {
         "total_queries": total_queries,
         "total_time_seconds": total_time_seconds,
@@ -318,16 +331,18 @@ def calculate_statistics(results_dir: str) -> Dict[str, float]:
 def main():
     parser = argparse.ArgumentParser(description="Milvus Vector Database Benchmark")
 
+    parser.add_argument("--config", type=str, help="Path to vdbbench config file")
+
     # Required parameters
-    parser.add_argument("--processes", type=int, required=True, help="Number of parallel processes")
-    parser.add_argument("--batch-size", type=int, required=True, help="Number of queries per batch")
-    parser.add_argument("--vector-dim", type=int, default=1536, required=True, help="Vector dimension")
+    parser.add_argument("--processes", type=int, help="Number of parallel processes")
+    parser.add_argument("--batch-size", type=int, help="Number of queries per batch")
+    parser.add_argument("--vector-dim", type=int, default=1536, help="Vector dimension")
     parser.add_argument("--report-count", type=int, default=10, help="Number of queries between logging results")
 
     # Database parameters
     parser.add_argument("--host", type=str, default="localhost", help="Milvus server host")
     parser.add_argument("--port", type=str, default="19530", help="Milvus server port")
-    parser.add_argument("--collection", type=str, required=True, help="Collection name to query")
+    parser.add_argument("--collection-name", type=str, help="Collection name to query")
 
     # Termination conditions (at least one must be specified)
     termination_group = parser.add_argument_group("termination conditions (at least one required)")
@@ -349,10 +364,13 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
+    # Load config from YAML if specified
+    if args.config:
+        config = load_config(args.config)
+        args = merge_config_with_args(config, args)
+
     # Create output directory
-    benchmark_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-    results_dir = os.path.join(args.output_dir, f"milvus_benchmark_{benchmark_id}")
-    os.makedirs(results_dir, exist_ok=True)
+    os.makedirs(args.output_dir, exist_ok=True)
 
     # Save benchmark configuration
     config = {
@@ -363,16 +381,16 @@ def main():
         "vector_dim": args.vector_dim,
         "host": args.host,
         "port": args.port,
-        "collection": args.collection,
+        "collection_name": args.collection_name,
         "runtime_seconds": args.runtime,
         "total_queries": args.queries
     }
 
-    with open(os.path.join(results_dir, "config.json"), 'w') as f:
+    with open(os.path.join(args.output_dir, "config.json"), 'w') as f:
         json.dump(config, f, indent=2)
 
     print(f"Starting benchmark with {args.processes} processes")
-    print(f"Results will be saved to: {results_dir}")
+    print(f"Results will be saved to: {args.output_dir}")
 
     # Read initial disk stats
     start_disk_stats = read_disk_stats()
@@ -386,8 +404,11 @@ def main():
 
     # Start worker processes
     processes = []
+    stagger_interval_secs = 1 / args.processes
     try:
         for i in range(args.processes):
+            if i > 0:
+                time.sleep(stagger_interval_secs)
             # Adjust queries for the first process if there's a remainder
             process_max_queries = None
             if max_queries_per_process is not None:
@@ -399,13 +420,13 @@ def main():
                     i,
                     args.host,
                     args.port,
-                    args.collection,
+                    args.collection_name,
                     args.vector_dim,
                     args.batch_size,
                     args.report_count,
                     process_max_queries,
                     args.runtime,
-                    results_dir,
+                    args.output_dir,
                     shutdown_flag
                 )
             )
@@ -437,7 +458,7 @@ def main():
 
     # Calculate and print statistics
     print("\nCalculating benchmark statistics...")
-    stats = calculate_statistics(results_dir)
+    stats = calculate_statistics(args.output_dir)
 
     # Add disk I/O statistics to the stats dictionary
     if disk_io_diff:
@@ -470,7 +491,7 @@ def main():
         stats["disk_io"] = {"error": "Disk I/O statistics not available"}
 
     # Save statistics to file
-    with open(os.path.join(results_dir, "statistics.json"), 'w') as f:
+    with open(os.path.join(args.output_dir, "statistics.json"), 'w') as f:
         json.dump(stats, f, indent=2)
 
     if args.json_output:
@@ -482,27 +503,34 @@ def main():
         print("BENCHMARK SUMMARY")
         print("=" * 50)
         print(f"Total Queries: {stats.get('total_queries', 0)}")
+        print(f"Total Batches: {stats.get('batch_count', 0)}")
+        print(f'Total Runtime: {stats.get("total_time_seconds", 0):.2f} seconds')
+
+        # Print query time statistics
+        print("\nQUERY STATISTICS")
+        print("-" * 50)
+
         print(f"Mean Latency: {stats.get('mean_latency_ms', 0):.2f} ms")
         print(f"Median Latency: {stats.get('median_latency_ms', 0):.2f} ms")
         print(f"95th Percentile: {stats.get('p95_latency_ms', 0):.2f} ms")
         print(f"99th Percentile: {stats.get('p99_latency_ms', 0):.2f} ms")
         print(f"99.9th Percentile: {stats.get('p999_latency_ms', 0):.2f} ms")
+        print(f"99.99th Percentile: {stats.get('p9999_latency_ms', 0):.2f} ms")
         print(f"Throughput: {stats.get('throughput_qps', 0):.2f} queries/second")
 
         # Print batch time statistics
         print("\nBATCH STATISTICS")
         print("-" * 50)
-        print(f"Total Batches: {stats.get('batch_count', 0)}")
+
         print(f"Mean Batch Time: {stats.get('mean_batch_time_ms', 0):.2f} ms")
         print(f"Median Batch Time: {stats.get('median_batch_time_ms', 0):.2f} ms")
         print(f"95th Percentile: {stats.get('p95_batch_time_ms', 0):.2f} ms")
         print(f"99th Percentile: {stats.get('p99_batch_time_ms', 0):.2f} ms")
         print(f"99.9th Percentile: {stats.get('p999_batch_time_ms', 0):.2f} ms")
+        print(f"99.99th Percentile: {stats.get('p9999_batch_time_ms', 0):.2f} ms")
+        print(f"Max Batch Time: {stats.get('max_batch_time_ms', 0):.2f} ms")
         print(f"Batch Throughput: {1000 / stats.get('mean_batch_time_ms', float('inf')):.2f} batches/second")
 
-        # Print disk I/O statistics
-        print("\nDISK I/O DURING BENCHMARK")
-        print("-" * 50)
         # Print disk I/O statistics
         print("\nDISK I/O DURING BENCHMARK")
         print("-" * 50)
@@ -525,7 +553,7 @@ def main():
         else:
             print("Disk I/O statistics not available")
 
-        print("\nDetailed results saved to:", results_dir)
+        print("\nDetailed results saved to:", args.output_dir)
         print("=" * 50)
 
 
