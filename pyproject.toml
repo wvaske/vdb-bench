@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vdbbench"
+version = "0.1.0"
+description = "Vector Database Benchmarking Tool"
+readme = "README.md"
+authors = [
+    {name = "Vector DB Benchmark Team"}
+]
+license = {text = "MIT"}
+requires-python = ">=3.8"
+dependencies = [
+    "numpy",
+    "pandas",
+    "pymilvus",
+    "pyyaml"
+]
+
+[project.urls]
+"Homepage" = "https://github.com/wvaske/vdb-bench"
+"Bug Tracker" = "https://github.com/wvaske/vdb-bench/issues"
+
+[project.scripts]
+compact-and-watch = "vdbbench.compact_and_watch:main"
+load-vdb = "vdbbench.load_vdb:main"
+vdbbench = "vdbbench.simple_bench:main"
+
+[tool.setuptools]
+packages = {find = {}}
+
+[tool.setuptools.package-data]
+vdbbench = ["*.py"]
