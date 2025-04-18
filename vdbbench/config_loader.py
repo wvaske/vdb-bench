@@ -1,6 +1,5 @@
 import yaml
 import os
-import logging
 
 def load_config(config_file=None):
     """
@@ -20,16 +19,16 @@ def load_config(config_file=None):
     if path_exists or configs_path_exists:
         config_file = config_file if path_exists else os.path.join("configs", config_file)
     else:
-        logging.error(f"Configuration file not found: {config_file}")
+        print(f"ERROR: Configuration file not found: {config_file}")
         return {}
         
     try:
         with open(config_file, 'r') as f:
             config = yaml.safe_load(f)
-            logging.info(f"Loaded configuration from {config_file}")
+            print(f"Loaded vdbbench configuration from {config_file}")
             return config
     except Exception as e:
-        logging.error(f"Error loading configuration file: {str(e)}")
+        print("ERROR - Error loading configuration file: {str(e)}")
         return {}
 
 

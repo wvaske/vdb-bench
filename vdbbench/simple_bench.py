@@ -16,11 +16,13 @@ import csv
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional, Tuple, Union
 import signal
 import sys
+from tabulate import tabulate
 
 from vdbbench.config_loader import load_config, merge_config_with_args
+from vdbbench.list_collections import get_collection_info
 
 try:
     from pymilvus import connections, Collection
@@ -164,7 +166,7 @@ def execute_batch_queries(process_id: int, host: str, port: str, collection_name
 
     # Prepare output file
     output_file = Path(output_dir) / f"milvus_benchmark_p{process_id}.csv"
-
+    sys.stdout.write(f"Process {process_id}: Writing results to {output_file}\r\n")
     # Create output directory if it doesn't exist
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
 
@@ -173,7 +175,8 @@ def execute_batch_queries(process_id: int, host: str, port: str, collection_name
     query_count = 0
     batch_count = 0
 
-    print(f"Process {process_id}: Starting benchmark")
+    sys.stdout.write(f"Process {process_id}: Starting benchmark\r\n")
+    sys.stdout.flush()
 
     try:
         with open(output_file, 'w') as f:
@@ -238,7 +241,8 @@ def execute_batch_queries(process_id: int, host: str, port: str, collection_name
 
                 # Print progress
                 if batch_count % report_count == 0:
-                    print(f"Process {process_id}: Completed {query_count} queries in {elapsed_time:.2f} seconds")
+                    sys.stdout.write(f"Process {process_id}: Completed {query_count} queries in {elapsed_time:.2f} seconds.\r\n")
+                    sys.stdout.flush()
 
     except Exception as e:
         print(f"Process {process_id}: Error during benchmark: {e}")
@@ -251,10 +255,10 @@ def execute_batch_queries(process_id: int, host: str, port: str, collection_name
             pass
 
         print(
-            f"Process {process_id}: Finished. Executed {query_count} queries in {time.time() - start_time:.2f} seconds")
+            f"Process {process_id}: Finished. Executed {query_count} queries in {time.time() - start_time:.2f} seconds", flush=True)
 
 
-def calculate_statistics(results_dir: str) -> Dict[str, float]:
+def calculate_statistics(results_dir: str) -> Dict[str, Union[str, int, float, Dict[str, int]]]:
     """Calculate statistics from benchmark results"""
     import pandas as pd
     
@@ -328,6 +332,54 @@ def calculate_statistics(results_dir: str) -> Dict[str, float]:
     return stats
 
 
+def load_database(host: str, port: str, collection_name: str) -> Union[dict, None]:
+    print(f'Connecting to Milvus server at {host}:{port}...', flush=True)
+    if not connect_to_milvus(host, port):
+        print(f'Unable to connect to Milvus server', flush=True)
+        return None
+
+    # Connect to Milvus
+    try:
+        collection = Collection(collection_name)
+    except Exception as e:
+        print(f"Unable to connect to Milvus collection {collection_name}: {e}", flush=True)
+        return None
+
+    try:
+        print(f'Loading the collection {collection_name}...')
+        start_load_time = time.time()
+        collection.load()
+        load_time = time.time() - start_load_time
+        print(f'Collection {collection_name} loaded in {load_time:.2f} seconds', flush=True)
+    except Exception as e:
+        print(f'Unable to load collection {collection_name}: {e}')
+        return None
+
+    print(f'Getting collection statistics...', flush=True)
+    collection_info = get_collection_info(collection_name)
+    table_data = []
+
+    index_types = ", ".join([idx.get("index_type", "N/A") for idx in collection_info.get("index_info", [])])
+    metric_types = ", ".join([idx.get("metric_type", "N/A") for idx in collection_info.get("index_info", [])])
+
+    row = [
+        collection_info["name"],
+        collection_info.get("row_count", "N/A"),
+        collection_info.get("dimension", "N/A"),
+        index_types,
+        metric_types,
+        len(collection_info.get("partitions", []))
+    ]
+    table_data.append(row)
+
+    headers = ["Collection Name", "Vector Count", "Dimension", "Index Types", "Metric Types", "Partitions"]
+    print(f'\nTabulating information...', flush=True)
+    tabulated_data = tabulate(table_data, headers=headers, tablefmt="grid")
+    print(tabulated_data, flush=True)
+
+    return collection_info
+
+
 def main():
     parser = argparse.ArgumentParser(description="Milvus Vector Database Benchmark")
 
@@ -364,6 +416,11 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
+    print("")
+    print("=" * 50)
+    print("OUTPUT CONFIGURATION", flush=True)
+    print("=" * 50, flush=True)
+
     # Load config from YAML if specified
     if args.config:
         config = load_config(args.config)
@@ -386,13 +443,25 @@ def main():
         "total_queries": args.queries
     }
 
+    print(f"Results will be saved to: {args.output_dir}")
+    print(f'Writing configuration to {args.output_dir}/config.json')
     with open(os.path.join(args.output_dir, "config.json"), 'w') as f:
         json.dump(config, f, indent=2)
 
-    print(f"Starting benchmark with {args.processes} processes")
-    print(f"Results will be saved to: {args.output_dir}")
+    print("")
+    print("=" * 50)
+    print("Database Verification and Loading", flush=True)
+    print("=" * 50)
+
+    print(f'Verifing database connection and loading collection')
+    if collection_info := load_database(args.host, args.port, args.collection_name):
+        print(f"\nCOLLECTION INFORMATION: {collection_info}")
+    else:
+        print("Unable to load the specified collection")
+        sys.exit(1)
 
     # Read initial disk stats
+    print(f'\nCollecting initial disk statistics...')
     start_disk_stats = read_disk_stats()
 
     # Calculate queries per process if total queries specified
@@ -405,52 +474,67 @@ def main():
     # Start worker processes
     processes = []
     stagger_interval_secs = 1 / args.processes
-    try:
-        for i in range(args.processes):
-            if i > 0:
-                time.sleep(stagger_interval_secs)
-            # Adjust queries for the first process if there's a remainder
-            process_max_queries = None
-            if max_queries_per_process is not None:
-                process_max_queries = max_queries_per_process + (remainder if i == 0 else 0)
 
-            p = mp.Process(
-                target=execute_batch_queries,
-                args=(
-                    i,
-                    args.host,
-                    args.port,
-                    args.collection_name,
-                    args.vector_dim,
-                    args.batch_size,
-                    args.report_count,
-                    process_max_queries,
-                    args.runtime,
-                    args.output_dir,
-                    shutdown_flag
+    print("")
+    print("=" * 50)
+    print("Benchmark Execution", flush=True)
+    print("=" * 50)
+    if max_queries_per_process is not None:
+        print(f"Starting benchmark with {args.processes} processes and {max_queries_per_process} queries per process")
+    else:
+        print(f'Starting benchmark with {args.processes} processes and running for {args.runtime} seconds')
+    if args.processes > 1:
+        print(f"Staggering benchmark execution by {stagger_interval_secs} seconds between processes")
+        try:
+            for i in range(args.processes):
+                if i > 0:
+                    time.sleep(stagger_interval_secs)
+                # Adjust queries for the first process if there's a remainder
+                process_max_queries = None
+                if max_queries_per_process is not None:
+                    process_max_queries = max_queries_per_process + (remainder if i == 0 else 0)
+
+                p = mp.Process(
+                    target=execute_batch_queries,
+                    args=(
+                        i,
+                        args.host,
+                        args.port,
+                        args.collection_name,
+                        args.vector_dim,
+                        args.batch_size,
+                        args.report_count,
+                        process_max_queries,
+                        args.runtime,
+                        args.output_dir,
+                        shutdown_flag
+                    )
                 )
-            )
-            p.start()
-            processes.append(p)
+                p.start()
+                processes.append(p)
 
-        # Wait for all processes to complete
-        for p in processes:
-            p.join()
+            # Wait for all processes to complete
+            for p in processes:
+                p.join()
+        except Exception as e:
+            print(f"Error during benchmark execution: {e}")
+            # Signal all processes to terminate
+            with shutdown_flag.get_lock():
+                shutdown_flag.value = 1
 
-    except Exception as e:
-        print(f"Error during benchmark execution: {e}")
-        # Signal all processes to terminate
-        with shutdown_flag.get_lock():
-            shutdown_flag.value = 1
-
-        # Wait for processes to terminate
-        for p in processes:
-            if p.is_alive():
-                p.join(timeout=5)
+            # Wait for processes to terminate
+            for p in processes:
                 if p.is_alive():
-                    p.terminate()
+                    p.join(timeout=5)
+                    if p.is_alive():
+                        p.terminate()
+    else:
+        print(f'Running single process benchmark...')
+        execute_batch_queries(0, args.host, args.port, args.collection_name, args.vector_dim, args.batch_size,
+                              args.report_count, args.queries, args.runtime, args.output_dir, shutdown_flag)
 
     # Read final disk stats
+    print('Reading final disk statistics...')
     end_disk_stats = read_disk_stats()
 
     # Calculate disk I/O during benchmark
