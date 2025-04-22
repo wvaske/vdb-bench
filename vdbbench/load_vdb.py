@@ -29,8 +29,8 @@ def parse_args():
     parser.add_argument("--collection-name", type=str, help="Name of the collection to create")
     parser.add_argument("--dimension", type=int, help="Vector dimension")
     parser.add_argument("--num-shards", type=int, default=1, help="Number of shards for the collection")
-    parser.add_argument("--vector-dtype", type=str, default="float", choices=["float", "float16"], 
-                        help="Vector data type (float or float16)")
+    parser.add_argument("--vector-dtype", type=str, default="float", choices=["FLOAT_VECTOR"],
+                        help="Vector data type. Only FLOAT_VECTOR is supported for now")
     parser.add_argument("--force", action="store_true", help="Force recreate collection if it exists")
     
     # Data generation parameters

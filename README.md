@@ -26,6 +26,28 @@ cd vdb-bench
 pip3 install ./
 ```
 
+## Deploying a Standalone Milvus Instance
+The docker-compose.yml file will configure a 3-container instance of Milvus database.
+ - Milvus Database
+ - Minio Object Storage
+ - etcd 
+
+The docker-compose.yml file uses ```/mnt/vdb``` as the root directory for the required docker volumes. You can modify the compose file for your environment or ensure that your target storage is mounted at this location.
+
+For testing more than one storage solution, there are two methods:
+1. Create a set of containers for each storage solution with modified docker-compose.yml files pointing to different root directories. Each set of containers will also need a different port to listen on. You may need to limit how many instances you can run depending on the available memory in your system
+2. Bring down the containers, copy the /mnt/vdb data to another location, change the mount point to point to the new locaiton. Bring the containers back up. This is simpler as the database connection isn't changing but you need to manually reconfigure the storage to change the system under test.
+
+### Deployment
+```bash
+cd ./vd-bench
+docker compose up  # with docker-compose-v2. v1 uses docker-compose up
+```
+
+Use the ```-d``` option to detach from the containers after starting them. Without this option you will be attached to the log output of the set of containers and ```ctrl+c``` will stop the containers.
+
+*If you have connection problems with a proxy I recommend this link: https://medium.com/@SrvZ/docker-proxy-and-my-struggles-a4fd6de21861*
+
 ## Running the Benchmark
 The benchmark process consists of three main steps:
 1. Loading vectors into the database
@@ -41,7 +63,7 @@ python load_vdb.py --config configs/10m.yaml
 
 For testing, I recommend using a smaller data by passing the num_vectors option:
 ```bash
-python load_vdb.py --config configs/10m.yaml --collection_name mlps_500k_10shards_1536dim_uniform --num_vectors 500000
+python load_vdb.py --config configs/10m.yaml --collection-name mlps_500k_10shards_1536dim_uniform --num-vectors 500000
 ```
 
 Key parameters:

@@ -10,6 +10,7 @@ dataset:
   num_vectors: 10_000_000
   dimension: 1536
   distribution: uniform
+  chunk_size: 10000
   batch_size: 1000
   num_shards: 10
   vector_dtype: FLOAT_VECTOR

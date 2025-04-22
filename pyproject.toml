@@ -16,7 +16,8 @@ dependencies = [
     "numpy",
     "pandas",
     "pymilvus",
-    "pyyaml"
+    "pyyaml",
+    "tabulate"
 ]
 
 [project.urls]
