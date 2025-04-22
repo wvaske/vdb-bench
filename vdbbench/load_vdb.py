@@ -41,8 +41,8 @@ def parse_args():
     parser.add_argument("--chunk-size", type=int, default=1000000, help="Number of vectors to generate in each chunk (for memory management)")
 
     # Index parameters
-    parser.add_argument("--index-type", type=str, default="HNSW", help="Index type")
-    parser.add_argument("--metric-type", type=str, default="L2", help="Metric type for index")
+    parser.add_argument("--index-type", type=str, default="DiskANN", help="Index type")
+    parser.add_argument("--metric-type", type=str, default="COSINE", help="Metric type for index")
     parser.add_argument("--M", type=int, default=16, help="HNSW M parameter")
     parser.add_argument("--ef-construction", type=int, default=200, help="HNSW efConstruction parameter")
     
@@ -70,8 +70,8 @@ def parse_args():
         'distribution': args.distribution == "uniform",
         'batch_size': args.batch_size == 10000,
         'chunk_size': args.chunk_size == 1000000,
-        'index_type': args.index_type == "HNSW",
-        'metric_type': args.metric_type == "L2",
+        'index_type': args.index_type == "DiskANN",
+        'metric_type': args.metric_type == "COSINE",
         'M': args.M == 16,
         'ef_construction': args.ef_construction == 200,
         'monitor_interval': args.monitor_interval == 5,
