@@ -25,7 +25,7 @@ from vdbbench.config_loader import load_config, merge_config_with_args
 from vdbbench.list_collections import get_collection_info
 
 try:
-    from pymilvus import connections, Collection
+    from pymilvus import connections, Collection, utility
 except ImportError:
     print("Error: pymilvus package not found. Please install it with 'pip install pymilvus'")
     sys.exit(1)
@@ -124,11 +124,11 @@ def generate_random_vector(dim: int) -> List[float]:
     return (vec / np.linalg.norm(vec)).tolist()
 
 
-def connect_to_milvus(host: str, port: str) -> bool:
+def connect_to_milvus(host: str, port: str) -> connections:
     """Establish connection to Milvus server"""
     try:
         connections.connect(alias="default", host=host, port=port)
-        return True
+        return connections
     except Exception as e:
         print(f"Failed to connect to Milvus: {e}")
         return False
@@ -152,13 +152,17 @@ def execute_batch_queries(process_id: int, host: str, port: str, collection_name
         output_dir: Directory to save results
         shutdown_flag: Shared value to signal process termination
     """
+    print(f'Process {process_id} initialized')
     # Connect to Milvus
-    if not connect_to_milvus(host, port):
+    connections = connect_to_milvus(host, port)
+    if not connections:
+        print(f'Process {process_id} - No milvus connection')
         return
 
     # Get collection
     try:
         collection = Collection(collection_name)
+        print(f'Process {process_id} - Loading collection')
         collection.load()
     except Exception as e:
         print(f"Process {process_id}: Failed to load collection: {e}")
@@ -332,9 +336,10 @@ def calculate_statistics(results_dir: str) -> Dict[str, Union[str, int, float, D
     return stats
 
 
-def load_database(host: str, port: str, collection_name: str) -> Union[dict, None]:
+def load_database(host: str, port: str, collection_name: str, reload=False) -> Union[dict, None]:
     print(f'Connecting to Milvus server at {host}:{port}...', flush=True)
-    if not connect_to_milvus(host, port):
+    connections = connect_to_milvus(host, port)
+    if not connections:
         print(f'Unable to connect to Milvus server', flush=True)
         return None
 
@@ -346,17 +351,26 @@ def load_database(host: str, port: str, collection_name: str) -> Union[dict, Non
         return None
 
     try:
-        print(f'Loading the collection {collection_name}...')
-        start_load_time = time.time()
-        collection.load()
-        load_time = time.time() - start_load_time
-        print(f'Collection {collection_name} loaded in {load_time:.2f} seconds', flush=True)
+        # Get the load state of the collection:
+        state = utility.load_state(collection_name)
+        if reload or state.name != "Loaded":
+            if reload:
+                print(f'Reloading the collection {collection_name}...')
+            else:
+                print(f'Loading the collection {collection_name}...')
+            start_load_time = time.time()
+            collection.load()
+            load_time = time.time() - start_load_time
+            print(f'Collection {collection_name} loaded in {load_time:.2f} seconds', flush=True)
+        if not reload and state.name == "Loaded":
+            print(f'Collection {collection_name} already reloaded and not reloading...')
+
     except Exception as e:
         print(f'Unable to load collection {collection_name}: {e}')
         return None
 
     print(f'Getting collection statistics...', flush=True)
-    collection_info = get_collection_info(collection_name)
+    collection_info = get_collection_info(collection_name, release=False)
     table_data = []
 
     index_types = ", ".join([idx.get("index_type", "N/A") for idx in collection_info.get("index_info", [])])
@@ -453,9 +467,12 @@ def main():
     print("Database Verification and Loading", flush=True)
     print("=" * 50)
 
+    connections = connect_to_milvus(args.host, args.port)
     print(f'Verifing database connection and loading collection')
     if collection_info := load_database(args.host, args.port, args.collection_name):
         print(f"\nCOLLECTION INFORMATION: {collection_info}")
+        # Having an active connection in the main thread when we fork seems to cause problems
+        connections.disconnect("default")
     else:
         print("Unable to load the specified collection")
         sys.exit(1)
@@ -510,6 +527,7 @@ def main():
                         shutdown_flag
                     )
                 )
+                print(f'Starting process {i}...')
                 p.start()
                 processes.append(p)
 
