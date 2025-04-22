@@ -61,7 +61,7 @@ def connect_to_milvus(host, port):
         return False
 
 
-def get_collection_info(collection_name):
+def get_collection_info(collection_name, release=True):
     """Get detailed information about a collection"""
     try:
         collection = Collection(collection_name)
@@ -110,10 +110,12 @@ def get_collection_info(collection_name):
         }
     finally:
         # Release collection
-        try:
-            collection.release()
-        except:
-            pass
+        if release:
+            try:
+                collection.release()
+            except:
+                pass
+
 
 def main():
     """Main function"""
