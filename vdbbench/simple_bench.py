@@ -179,14 +179,13 @@ def execute_batch_queries(process_id: int, host: str, port: str, collection_name
     query_count = 0
     batch_count = 0
 
-    sys.stdout.write(f"Process {process_id}: Starting benchmark\r\n")
+    sys.stdout.write(f"Process {process_id}: Starting benchmark ...\r\n")
     sys.stdout.flush()
 
     try:
         with open(output_file, 'w') as f:
             writer = csv.DictWriter(f, fieldnames=csv_fields)
             writer.writeheader()
-
             while True:
                 # Check if we should terminate
                 with shutdown_flag.get_lock():
@@ -290,8 +289,8 @@ def calculate_statistics(results_dir: str) -> Dict[str, Union[str, int, float, D
     all_data.sort_values('timestamp', inplace=True)
 
     # Calculate start and end times
-    file_start_time = all_data['timestamp'].min()
-    file_end_time = (all_data.tail(1)['timestamp'] + all_data.tail(1)['batch_time_seconds']).max()
+    file_start_time = min(all_data['timestamp'])
+    file_end_time = max(all_data['timestamp'] + all_data['batch_time_seconds'])
     total_time_seconds = file_end_time - file_start_time
 
     # Each row represents a batch, so we need to expand based on batch_size
@@ -416,8 +415,7 @@ def main():
     termination_group.add_argument("--queries", type=int, help="Total number of queries to execute")
 
     # Output directory
-    parser.add_argument("--output-dir", type=str, default="benchmark_results",
-                        help="Directory to save benchmark results")
+    parser.add_argument("--output-dir", type=str, help="Directory to save benchmark results")
     parser.add_argument("--json-output", action="store_true", help="Print benchmark results as JSON document")
 
     args = parser.parse_args()
@@ -441,7 +439,14 @@ def main():
         args = merge_config_with_args(config, args)
 
     # Create output directory
-    os.makedirs(args.output_dir, exist_ok=True)
+    if not args.output_dir:
+        output_dir = "vdbbench_results"
+        datetime_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir = os.path.join(output_dir, datetime_str)
+    else:
+        output_dir = args.output_dir
+
+    os.makedirs(output_dir, exist_ok=True)
 
     # Save benchmark configuration
     config = {
@@ -457,9 +462,9 @@ def main():
         "total_queries": args.queries
     }
 
-    print(f"Results will be saved to: {args.output_dir}")
-    print(f'Writing configuration to {args.output_dir}/config.json')
-    with open(os.path.join(args.output_dir, "config.json"), 'w') as f:
+    print(f"Results will be saved to: {output_dir}")
+    print(f'Writing configuration to {output_dir}/config.json')
+    with open(os.path.join(output_dir, "config.json"), 'w') as f:
         json.dump(config, f, indent=2)
 
     print("")
@@ -523,7 +528,7 @@ def main():
                         args.report_count,
                         process_max_queries,
                         args.runtime,
-                        args.output_dir,
+                        output_dir,
                         shutdown_flag
                     )
                 )
@@ -549,7 +554,7 @@ def main():
     else:
         print(f'Running single process benchmark...')
         execute_batch_queries(0, args.host, args.port, args.collection_name, args.vector_dim, args.batch_size,
-                              args.report_count, args.queries, args.runtime, args.output_dir, shutdown_flag)
+                              args.report_count, args.queries, args.runtime, output_dir, shutdown_flag)
 
     # Read final disk stats
     print('Reading final disk statistics...')
@@ -560,7 +565,7 @@ def main():
 
     # Calculate and print statistics
     print("\nCalculating benchmark statistics...")
-    stats = calculate_statistics(args.output_dir)
+    stats = calculate_statistics(output_dir)
 
     # Add disk I/O statistics to the stats dictionary
     if disk_io_diff:
@@ -593,7 +598,7 @@ def main():
         stats["disk_io"] = {"error": "Disk I/O statistics not available"}
 
     # Save statistics to file
-    with open(os.path.join(args.output_dir, "statistics.json"), 'w') as f:
+    with open(os.path.join(output_dir, "statistics.json"), 'w') as f:
         json.dump(stats, f, indent=2)
 
     if args.json_output:
@@ -655,7 +660,7 @@ def main():
         else:
             print("Disk I/O statistics not available")
 
-        print("\nDetailed results saved to:", args.output_dir)
+        print("\nDetailed results saved to:", output_dir)
         print("=" * 50)
 
 
