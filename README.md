@@ -1,5 +1,5 @@
 # Vector Database Benchmark Tool
-This tool allows you to benchmark and compare the performance of vector databases, with a focus on Milvus, Qdrant, and Pinecone.
+This tool allows you to benchmark and compare the performance of vector databases with current support for Milvus and others planned.
 
 ## Installation
 
