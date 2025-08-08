@@ -11,7 +11,7 @@ cd vdb-bench
 ```
 2. Build and run the Docker container:
 ```bash
-docker-compose up -d
+docker compose up -d # with docker-compose-v2. v1 uses docker-compose up
 ```
 
 ### Manual Installation
@@ -36,15 +36,15 @@ The docker-compose.yml file uses ```/mnt/vdb``` as the root directory for the re
 
 For testing more than one storage solution, there are two methods:
 1. Create a set of containers for each storage solution with modified docker-compose.yml files pointing to different root directories. Each set of containers will also need a different port to listen on. You may need to limit how many instances you can run depending on the available memory in your system
-2. Bring down the containers, copy the /mnt/vdb data to another location, change the mount point to point to the new locaiton. Bring the containers back up. This is simpler as the database connection isn't changing but you need to manually reconfigure the storage to change the system under test.
+2. Bring down the containers, copy the /mnt/vdb data to another location, change the mount point to point to the new location. Bring the containers back up. This is simpler as the database connection isn't changing but you need to manually reconfigure the storage to change the system under test.
 
 ### Deployment
 ```bash
-cd ./vd-bench
-docker compose up  # with docker-compose-v2. v1 uses docker-compose up
+cd vdb-bench
+docker compose up -d # with docker-compose-v2. v1 uses docker-compose up
 ```
 
-Use the ```-d``` option to detach from the containers after starting them. Without this option you will be attached to the log output of the set of containers and ```ctrl+c``` will stop the containers.
+```-d``` option is required to detach from the containers after starting them. Without this option you will be attached to the log output of the set of containers and ```ctrl+c``` will stop the containers.
 
 *If you have connection problems with a proxy I recommend this link: https://medium.com/@SrvZ/docker-proxy-and-my-struggles-a4fd6de21861*
 
@@ -57,13 +57,13 @@ The benchmark process consists of three main steps:
 ### Step 1: Load Vectors into the Database
 Use the load_vdb.py script to generate and load 10 million vectors into your vector database: (this process can take up to 8 hours)
 ```bash
-python load_vdb.py --config configs/10m.yaml
+python vdbbench/load_vdb.py --config vdbbench/configs/10m.yaml
 ```
 
 
 For testing, I recommend using a smaller data by passing the num_vectors option:
 ```bash
-python load_vdb.py --config configs/10m.yaml --collection-name mlps_500k_10shards_1536dim_uniform --num-vectors 500000
+python vdbbench/load_vdb.py --config vdbbench/configs/10m.yaml --collection-name mlps_500k_10shards_1536dim_uniform --num-vectors 500000
 ```
 
 Key parameters:
@@ -74,7 +74,7 @@ Key parameters:
 * --distribution: Distribution for vector generation (uniform, normal)
 * --batch-size: Batch size for insertion
 
-Example configuration file (configs/10m.yaml):
+Example configuration file (vdbbench/configs/10m.yaml):
 ```yaml
 database:
   host: 127.0.0.1
@@ -106,14 +106,14 @@ workflow:
 ### Step 2: Monitor and Compact the Database
 The compact_and_watch.py script monitors the database and performs compaction. You should only need this if the load process exits out while waiting. The load script will do compaction and will wait for it to complete.
 ```bash
-python compact_and_watch.py --config configs/10m.yaml --interval 5
+python vdbbench/compact_and_watch.py --config vdbbench/configs/10m.yaml --interval 5
 ```
 This step is automatically performed at the end of the loading process if you set compact: true in your configuration.
 
 ### Step 3: Run the Benchmark
 Finally, run the benchmark using the simple_bench.py script:
 ```bash
-python simple_bench.py --host 127.0.0.1 --collection <collection_name> --processes <N> --batch-size <batch_size> --runtime <length of benchmark run in seconds>
+python vdbbench/simple_bench.py --host 127.0.0.1 --collection <collection_name> --processes <N> --batch-size <batch_size> --runtime <length of benchmark run in seconds>
 ```
 
 ## Supported Databases
