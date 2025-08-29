@@ -6,21 +6,21 @@ database:
   max_send_message_length: 514_983_574
 
 dataset:
-  collection_name: mlps_10m_10shards_1536dim_uniform
-  num_vectors: 10_000_000
+  collection_name: mlps_1m_1shards_1536dim_uniform_diskann
+  num_vectors: 1_000_000
   dimension: 1536
   distribution: uniform
-  chunk_size: 1_000_000
+  chunk_size: 100_000
   batch_size: 1000
-  num_shards: 10
+  num_shards: 1
   vector_dtype: FLOAT_VECTOR
 
 index:
   index_type: DISKANN
   metric_type: COSINE
-  index_params:
-    M: 64
-    ef_construction: 200
+  #index_params
+  max_degree: 64
+  search_list_size: 200
 
 workflow:
   compact: True

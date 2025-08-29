@@ -41,8 +41,10 @@ def parse_args():
     parser.add_argument("--chunk-size", type=int, default=1000000, help="Number of vectors to generate in each chunk (for memory management)")
 
     # Index parameters
-    parser.add_argument("--index-type", type=str, default="DiskANN", help="Index type")
+    parser.add_argument("--index-type", type=str, default="DISKANN", help="Index type")
     parser.add_argument("--metric-type", type=str, default="COSINE", help="Metric type for index")
+    parser.add_argument("--max-degree", type=int, default=16, help="DiskANN MaxDegree parameter")
+    parser.add_argument("--search-list-size", type=int, default=200, help="DiskANN SearchListSize parameter")
     parser.add_argument("--M", type=int, default=16, help="HNSW M parameter")
     parser.add_argument("--ef-construction", type=int, default=200, help="HNSW efConstruction parameter")
     
@@ -70,8 +72,10 @@ def parse_args():
         'distribution': args.distribution == "uniform",
         'batch_size': args.batch_size == 10000,
         'chunk_size': args.chunk_size == 1000000,
-        'index_type': args.index_type == "DiskANN",
+        'index_type': args.index_type == "DISKANN",
         'metric_type': args.metric_type == "COSINE",
+        'max_degree': args.max_degree == 16,
+        'search_list_size': args.search_list_size == 200,
         'M': args.M == 16,
         'ef_construction': args.ef_construction == 200,
         'monitor_interval': args.monitor_interval == 5,
@@ -283,11 +287,22 @@ def main():
     index_params = {
         "index_type": args.index_type,
         "metric_type": args.metric_type,
-        "params": {
+        "params": {}
+    }
+
+    # Update only the parameters based on index_type
+    if args.index_type == "HNSW":
+        index_params["params"] = {
             "M": args.M,
             "efConstruction": args.ef_construction
         }
-    }
+    elif args.index_type == "DISKANN":
+        index_params["params"] = {
+            "MaxDegree": args.max_degree,
+            "SearchListSize": args.search_list_size
+        }
+    else:
+        raise ValueError(f"Unsupported index_type: {args.index_type}")
 
     logger.debug(f'Creating index. This should be immediate on an empty collection')
     if not create_index(collection, index_params):

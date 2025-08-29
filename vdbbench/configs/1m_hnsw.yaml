@@ -6,7 +6,7 @@ database:
   max_send_message_length: 514_983_574
 
 dataset:
-  collection_name: mlps_1m_1shards_1536dim_uniform
+  collection_name: mlps_1m_1shards_1536dim_uniform_hnsw
   num_vectors: 1_000_000
   dimension: 1536
   distribution: uniform
@@ -16,11 +16,11 @@ dataset:
   vector_dtype: FLOAT_VECTOR
 
 index:
-  index_type: DISKANN
+  index_type: HNSW
   metric_type: COSINE
-  index_params:
-    M: 64
-    ef_construction: 200
+  #index_params
+  M: 64
+  ef_construction: 200
 
 workflow:
   compact: True
