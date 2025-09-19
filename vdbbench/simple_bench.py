@@ -237,7 +237,8 @@ def execute_batch_queries(process_id: int, host: str, port: str, collection_name
                 # Execute batch and measure time
                 batch_start = time.time()
                 try:
-                    search_params = {"metric_type": "COSINE", "params": {"ef": 200}}
+                    # Primary search with lower ef (what we're measuring for performance)
+                    search_params = {"metric_type": "COSINE", "params": {"ef": 50}}  # Lower ef for speed
                     results = collection.search(
                         data=batch_vectors,
                         anns_field="vector",
@@ -246,13 +247,13 @@ def execute_batch_queries(process_id: int, host: str, port: str, collection_name
                         output_fields=["id"]
                     )
                     
-                    # Calculate recall by performing brute-force search as ground truth
-                    # Note: This is computationally expensive and should be used carefully
+                    # Ground truth search with much higher ef for better accuracy
+                    ground_truth_params = {"metric_type": "COSINE", "params": {"ef": 1000}}  # Much higher ef
                     ground_truth_results = collection.search(
                         data=batch_vectors,
                         anns_field="vector",
-                        param={"metric_type": "COSINE", "params": {"nprobe": -1}},  # Brute force search
-                        limit=10,
+                        param=ground_truth_params,
+                        limit=50,  # Get more results for better ground truth
                         output_fields=["id"]
                     )
                     
@@ -266,7 +267,8 @@ def execute_batch_queries(process_id: int, host: str, port: str, collection_name
                     
                     for i, (search_result, ground_truth_result) in enumerate(zip(results, ground_truth_results)):
                         search_ids = [hit.id for hit in search_result]
-                        ground_truth_ids = [hit.id for hit in ground_truth_result]
+                        # Use top 10 from ground truth with higher ef as the reference
+                        ground_truth_ids = [hit.id for hit in ground_truth_result[:10]]
                         
                         recall_at_10 = calculate_recall(search_ids, ground_truth_ids, 10)
                         recall_at_5 = calculate_recall(search_ids, ground_truth_ids, 5)
