@@ -57,13 +57,13 @@ The benchmark process consists of three main steps:
 ### Step 1: Load Vectors into the Database
 Use the load_vdb.py script to generate and load 10 million vectors into your vector database: (this process can take up to 8 hours)
 ```bash
-python vdbbench/load_vdb.py --config vdbbench/configs/10m.yaml
+python vdbbench/load_vdb.py --config vdbbench/configs/10m_diskann.yaml
 ```
 
 
 For testing, I recommend using a smaller data by passing the num_vectors option:
 ```bash
-python vdbbench/load_vdb.py --config vdbbench/configs/10m.yaml --collection-name mlps_500k_10shards_1536dim_uniform --num-vectors 500000
+python vdbbench/load_vdb.py --config vdbbench/configs/10m_diskann.yaml --collection-name mlps_500k_10shards_1536dim_uniform_diskann --num-vectors 500000
 ```
 
 Key parameters:
@@ -74,7 +74,7 @@ Key parameters:
 * --distribution: Distribution for vector generation (uniform, normal)
 * --batch-size: Batch size for insertion
 
-Example configuration file (vdbbench/configs/10m.yaml):
+Example configuration file (vdbbench/configs/10m_diskann.yaml):
 ```yaml
 database:
   host: 127.0.0.1
@@ -84,7 +84,7 @@ database:
   max_send_message_length: 514_983_574
 
 dataset:
-  collection_name: mlps_10m_10shards_1536dim_uniform
+  collection_name: mlps_10m_10shards_1536dim_uniform_diskann
   num_vectors: 10_000_000
   dimension: 1536
   distribution: uniform
@@ -95,9 +95,9 @@ dataset:
 index:
   index_type: DISKANN
   metric_type: COSINE
-  index_params:
-    M: 64
-    ef_construction: 200
+  #index_params
+  max_degree: 64
+  search_list_size: 200
 
 workflow:
   compact: True
@@ -106,7 +106,7 @@ workflow:
 ### Step 2: Monitor and Compact the Database
 The compact_and_watch.py script monitors the database and performs compaction. You should only need this if the load process exits out while waiting. The load script will do compaction and will wait for it to complete.
 ```bash
-python vdbbench/compact_and_watch.py --config vdbbench/configs/10m.yaml --interval 5
+python vdbbench/compact_and_watch.py --config vdbbench/configs/10m_diskann.yaml --interval 5
 ```
 This step is automatically performed at the end of the loading process if you set compact: true in your configuration.
 
@@ -116,8 +116,10 @@ Finally, run the benchmark using the simple_bench.py script:
 python vdbbench/simple_bench.py --host 127.0.0.1 --collection <collection_name> --processes <N> --batch-size <batch_size> --runtime <length of benchmark run in seconds>
 ```
 
+For comparison with HNSW indexing, use ```vdbbench/configs/10m_hnsw.yaml``` and update collection_name accordingly.
+
 ## Supported Databases
-Milvus (currently implemented)
+Milvus with DiskANN & HNSW indexing (currently implemented)
 
 # Contributing
 Contributions are welcome! Please feel free to submit a Pull Request.
