@@ -43,7 +43,10 @@ csv_fields = [
     "batch_size",
     "batch_time_seconds",
     "avg_query_time_seconds",
-    "success"
+    "success",
+    "recall_at_10",
+    "recall_at_5",
+    "recall_at_1"
 ]
 
 
@@ -122,6 +125,32 @@ def generate_random_vector(dim: int) -> List[float]:
     """Generate a random normalized vector of the specified dimension"""
     vec = np.random.random(dim).astype(np.float32)
     return (vec / np.linalg.norm(vec)).tolist()
+
+
+def calculate_recall(search_results, ground_truth_results, k: int) -> float:
+    """
+    Calculate recall@k between search results and ground truth results
+    
+    Args:
+        search_results: List of search result IDs from the approximate search
+        ground_truth_results: List of ground truth IDs from the exact search
+        k: Number of top results to consider
+        
+    Returns:
+        Recall@k as a float between 0 and 1
+    """
+    if not search_results or not ground_truth_results:
+        return 0.0
+    
+    # Take only top k results from both sets
+    search_k = set(search_results[:k])
+    ground_truth_k = set(ground_truth_results[:k])
+    
+    # Calculate intersection
+    intersection = search_k.intersection(ground_truth_k)
+    
+    # Recall@k = |intersection| / |ground_truth_k|
+    return len(intersection) / len(ground_truth_k) if len(ground_truth_k) > 0 else 0.0
 
 
 def connect_to_milvus(host: str, port: str) -> connections:
@@ -208,7 +237,8 @@ def execute_batch_queries(process_id: int, host: str, port: str, collection_name
                 # Execute batch and measure time
                 batch_start = time.time()
                 try:
-                    search_params = {"metric_type": "COSINE", "params": {"ef": 200}}
+                    # Primary search with lower ef (what we're measuring for performance)
+                    search_params = {"metric_type": "COSINE", "params": {"ef": 50}}  # Lower ef for speed
                     results = collection.search(
                         data=batch_vectors,
                         anns_field="vector",
@@ -216,12 +246,50 @@ def execute_batch_queries(process_id: int, host: str, port: str, collection_name
                         limit=10,
                         output_fields=["id"]
                     )
+                    
+                    # Ground truth search with much higher ef for better accuracy
+                    ground_truth_params = {"metric_type": "COSINE", "params": {"ef": 1000}}  # Much higher ef
+                    ground_truth_results = collection.search(
+                        data=batch_vectors,
+                        anns_field="vector",
+                        param=ground_truth_params,
+                        limit=50,  # Get more results for better ground truth
+                        output_fields=["id"]
+                    )
+                    
                     batch_end = time.time()
                     batch_success = True
+                    
+                    # Calculate recall metrics for the batch
+                    batch_recall_at_10 = []
+                    batch_recall_at_5 = []
+                    batch_recall_at_1 = []
+                    
+                    for i, (search_result, ground_truth_result) in enumerate(zip(results, ground_truth_results)):
+                        search_ids = [hit.id for hit in search_result]
+                        # Use top 10 from ground truth with higher ef as the reference
+                        ground_truth_ids = [hit.id for hit in ground_truth_result[:10]]
+                        
+                        recall_at_10 = calculate_recall(search_ids, ground_truth_ids, 10)
+                        recall_at_5 = calculate_recall(search_ids, ground_truth_ids, 5)
+                        recall_at_1 = calculate_recall(search_ids, ground_truth_ids, 1)
+                        
+                        batch_recall_at_10.append(recall_at_10)
+                        batch_recall_at_5.append(recall_at_5)
+                        batch_recall_at_1.append(recall_at_1)
+                    
+                    # Average recall across the batch
+                    avg_recall_at_10 = np.mean(batch_recall_at_10) if batch_recall_at_10 else 0.0
+                    avg_recall_at_5 = np.mean(batch_recall_at_5) if batch_recall_at_5 else 0.0
+                    avg_recall_at_1 = np.mean(batch_recall_at_1) if batch_recall_at_1 else 0.0
+                    
                 except Exception as e:
                     print(f"Process {process_id}: Search error: {e}")
                     batch_end = time.time()
                     batch_success = False
+                    avg_recall_at_10 = 0.0
+                    avg_recall_at_5 = 0.0
+                    avg_recall_at_1 = 0.0
 
                 # Record batch results
                 batch_time = batch_end - batch_start
@@ -236,7 +304,10 @@ def execute_batch_queries(process_id: int, host: str, port: str, collection_name
                     "batch_size": batch_size,
                     "batch_time_seconds": batch_time,
                     "avg_query_time_seconds": batch_time / batch_size,
-                    "success": batch_success
+                    "success": batch_success,
+                    "recall_at_10": avg_recall_at_10,
+                    "recall_at_5": avg_recall_at_5,
+                    "recall_at_1": avg_recall_at_1
                 }
 
                 writer.writerow(batch_data)
@@ -307,6 +378,22 @@ def calculate_statistics(results_dir: str) -> Dict[str, Union[str, int, float, D
     batch_times = np.array(batch_times_ms)
     total_queries = len(latencies)
     
+    # Calculate recall statistics
+    recall_at_10_values = []
+    recall_at_5_values = []
+    recall_at_1_values = []
+    
+    for _, row in all_data.iterrows():
+        if row['success'] and 'recall_at_10' in row:
+            # Replicate recall values for each query in the batch
+            recall_at_10_values.extend([row['recall_at_10']] * row['batch_size'])
+            recall_at_5_values.extend([row['recall_at_5']] * row['batch_size'])
+            recall_at_1_values.extend([row['recall_at_1']] * row['batch_size'])
+    
+    recall_at_10_array = np.array(recall_at_10_values) if recall_at_10_values else np.array([0])
+    recall_at_5_array = np.array(recall_at_5_values) if recall_at_5_values else np.array([0])
+    recall_at_1_array = np.array(recall_at_1_values) if recall_at_1_values else np.array([0])
+    
     stats = {
         "total_queries": total_queries,
         "total_time_seconds": total_time_seconds,
@@ -329,7 +416,23 @@ def calculate_statistics(results_dir: str) -> Dict[str, Union[str, int, float, D
         "p95_batch_time_ms": float(np.percentile(batch_times, 95)) if len(batch_times) > 0 else 0,
         "p99_batch_time_ms": float(np.percentile(batch_times, 99)) if len(batch_times) > 0 else 0,
         "p999_batch_time_ms": float(np.percentile(batch_times, 99.9)) if len(batch_times) > 0 else 0,
-        "p9999_batch_time_ms": float(np.percentile(batch_times, 99.99)) if len(batch_times) > 0 else 0
+        "p9999_batch_time_ms": float(np.percentile(batch_times, 99.99)) if len(batch_times) > 0 else 0,
+        
+        # Recall statistics
+        "mean_recall_at_10": float(np.mean(recall_at_10_array)),
+        "median_recall_at_10": float(np.median(recall_at_10_array)),
+        "min_recall_at_10": float(np.min(recall_at_10_array)),
+        "max_recall_at_10": float(np.max(recall_at_10_array)),
+        
+        "mean_recall_at_5": float(np.mean(recall_at_5_array)),
+        "median_recall_at_5": float(np.median(recall_at_5_array)),
+        "min_recall_at_5": float(np.min(recall_at_5_array)),
+        "max_recall_at_5": float(np.max(recall_at_5_array)),
+        
+        "mean_recall_at_1": float(np.mean(recall_at_1_array)),
+        "median_recall_at_1": float(np.median(recall_at_1_array)),
+        "min_recall_at_1": float(np.min(recall_at_1_array)),
+        "max_recall_at_1": float(np.max(recall_at_1_array))
     }
 
     return stats
@@ -637,6 +740,28 @@ def main():
         print(f"99.99th Percentile: {stats.get('p9999_batch_time_ms', 0):.2f} ms")
         print(f"Max Batch Time: {stats.get('max_batch_time_ms', 0):.2f} ms")
         print(f"Batch Throughput: {1000 / stats.get('mean_batch_time_ms', float('inf')):.2f} batches/second")
+
+        # Print recall statistics
+        print("\nRECALL STATISTICS")
+        print("-" * 50)
+
+        print(f"Recall@10:")
+        print(f"  Mean: {stats.get('mean_recall_at_10', 0):.4f}")
+        print(f"  Median: {stats.get('median_recall_at_10', 0):.4f}")
+        print(f"  Min: {stats.get('min_recall_at_10', 0):.4f}")
+        print(f"  Max: {stats.get('max_recall_at_10', 0):.4f}")
+
+        print(f"Recall@5:")
+        print(f"  Mean: {stats.get('mean_recall_at_5', 0):.4f}")
+        print(f"  Median: {stats.get('median_recall_at_5', 0):.4f}")
+        print(f"  Min: {stats.get('min_recall_at_5', 0):.4f}")
+        print(f"  Max: {stats.get('max_recall_at_5', 0):.4f}")
+
+        print(f"Recall@1:")
+        print(f"  Mean: {stats.get('mean_recall_at_1', 0):.4f}")
+        print(f"  Median: {stats.get('median_recall_at_1', 0):.4f}")
+        print(f"  Min: {stats.get('min_recall_at_1', 0):.4f}")
+        print(f"  Max: {stats.get('max_recall_at_1', 0):.4f}")
 
         # Print disk I/O statistics
         print("\nDISK I/O DURING BENCHMARK")

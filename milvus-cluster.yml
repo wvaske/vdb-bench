@@ -1,0 +1,251 @@
+version: '3.5'
+
+services:
+  etcd:
+    container_name: milvus-etcd
+    image: quay.io/coreos/etcd:v3.6.4
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    volumes:
+      - /mnt/vdb/etcd:/etcd
+    command: etcd -advertise-client-urls=http://0.0.0.0:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    ports:
+      - "2379:2379"
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  minio:
+    container_name: milvus-minio
+    image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+    environment:
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+    ports:
+      - "9001:9001"
+      - "9000:9000"
+    volumes:
+      - /mnt/vdb/minio:/minio_data
+    command: minio server /minio_data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  rootcoord:
+    container_name: milvus-rootcoord
+    image: milvusdb/milvus:v2.6.0
+    command: ["milvus", "run", "rootcoord"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+      MINIO_REGION: us-east-1
+    volumes:
+      - /mnt/vdb/milvus:/var/lib/milvus
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:53100/healthz"]
+      interval: 30s
+      start_period: 90s
+      timeout: 20s
+      retries: 3
+    ports:
+      - "53100:53100"
+    depends_on:
+      - "etcd"
+      - "minio"
+
+  proxy:
+    container_name: milvus-proxy
+    image: milvusdb/milvus:v2.6.0
+    command: ["milvus", "run", "proxy"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+      MINIO_REGION: us-east-1
+    volumes:
+      - /mnt/vdb/milvus:/var/lib/milvus
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      start_period: 90s
+      timeout: 20s
+      retries: 3
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    depends_on:
+      - "etcd"
+      - "minio"
+      - "rootcoord"
+      - "querycoord"
+      - "datacoord"
+      - "indexcoord"
+
+  querycoord:
+    container_name: milvus-querycoord
+    image: milvusdb/milvus:v2.6.0
+    command: ["milvus", "run", "querycoord"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+      MINIO_REGION: us-east-1
+    volumes:
+      - /mnt/vdb/milvus:/var/lib/milvus
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:19531/healthz"]
+      interval: 30s
+      start_period: 90s
+      timeout: 20s
+      retries: 3
+    ports:
+      - "19531:19531"
+    depends_on:
+      - "etcd"
+      - "minio"
+      - "rootcoord"
+
+  querynode1:
+    container_name: milvus-querynode1
+    image: milvusdb/milvus:v2.6.0
+    command: ["milvus", "run", "querynode"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+      MINIO_REGION: us-east-1
+    volumes:
+      - /mnt/vdb/milvus:/var/lib/milvus
+    depends_on:
+      - "etcd"
+      - "minio"
+      - "querycoord"
+
+  querynode2:
+    container_name: milvus-querynode2
+    image: milvusdb/milvus:v2.6.0
+    command: ["milvus", "run", "querynode"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+      MINIO_REGION: us-east-1
+    volumes:
+      - /mnt/vdb/milvus:/var/lib/milvus
+    depends_on:
+      - "etcd"
+      - "minio"
+      - "querycoord"
+
+  datacoord:
+    container_name: milvus-datacoord
+    image: milvusdb/milvus:v2.6.0
+    command: ["milvus", "run", "datacoord"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+      MINIO_REGION: us-east-1
+    volumes:
+      - /mnt/vdb/milvus:/var/lib/milvus
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:13333/healthz"]
+      interval: 30s
+      start_period: 90s
+      timeout: 20s
+      retries: 3
+    ports:
+      - "13333:13333"
+    depends_on:
+      - "etcd"
+      - "minio"
+      - "rootcoord"
+
+  datanode1:
+    container_name: milvus-datanode1
+    image: milvusdb/milvus:v2.6.0
+    command: ["milvus", "run", "datanode"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+      MINIO_REGION: us-east-1
+    volumes:
+      - /mnt/vdb/milvus:/var/lib/milvus
+    depends_on:
+      - "etcd"
+      - "minio"
+      - "datacoord"
+
+  datanode2:
+    container_name: milvus-datanode2
+    image: milvusdb/milvus:v2.6.0
+    command: ["milvus", "run", "datanode"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+      MINIO_REGION: us-east-1
+    volumes:
+      - /mnt/vdb/milvus:/var/lib/milvus
+    depends_on:
+      - "etcd"
+      - "minio"
+      - "datacoord"
+
+  indexcoord:
+    container_name: milvus-indexcoord
+    image: milvusdb/milvus:v2.6.0
+    command: ["milvus", "run", "indexcoord"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+      MINIO_REGION: us-east-1
+    volumes:
+      - /mnt/vdb/milvus:/var/lib/milvus
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:31000/healthz"]
+      interval: 30s
+      start_period: 90s
+      timeout: 20s
+      retries: 3
+    ports:
+      - "31000:31000"
+    depends_on:
+      - "etcd"
+      - "minio"
+      - "rootcoord"
+
+  indexnode1:
+    container_name: milvus-indexnode1
+    image: milvusdb/milvus:v2.6.0
+    command: ["milvus", "run", "indexnode"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+      MINIO_REGION: us-east-1
+    volumes:
+      - /mnt/vdb/milvus:/var/lib/milvus
+    depends_on:
+      - "etcd"
+      - "minio"
+      - "indexcoord"
+
+  indexnode2:
+    container_name: milvus-indexnode2
+    image: milvusdb/milvus:v2.6.0
+    command: ["milvus", "run", "indexnode"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+      MINIO_REGION: us-east-1
+    volumes:
+      - /mnt/vdb/milvus:/var/lib/milvus
+    depends_on:
+      - "etcd"
+      - "minio"
+      - "indexcoord"
+
+networks:
+  default:
+    name: milvus
