@@ -25,9 +25,7 @@ dependencies = [
 "Bug Tracker" = "https://github.com/wvaske/vdb-bench/issues"
 
 [project.scripts]
-compact-and-watch = "vdbbench.compact_and_watch:main"
-load-vdb = "vdbbench.load_vdb:main"
-vdbbench = "vdbbench.simple_bench:main"
+vdbbench = "vdbbench.cli:main"
 
 [tool.setuptools]
 packages = {find = {}}

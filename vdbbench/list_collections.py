@@ -6,12 +6,12 @@ This script connects to a Milvus instance and lists all collections with detaile
 including the number of vectors in each collection and index information.
 """
 
-import sys
-import os
 import argparse
 import logging
+import sys
+from typing import Any, Dict, List, Optional
+
 from tabulate import tabulate
-from typing import Dict, List, Any
 
 # Configure logging
 logging.basicConfig(
@@ -20,30 +20,25 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Add the parent directory to sys.path to import config_loader
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 try:
     from pymilvus import connections, utility, Collection
 except ImportError:
     logger.error("Error: pymilvus package not found. Please install it with 'pip install pymilvus'")
     sys.exit(1)
 
-try:
-    from tabulate import tabulate
-except ImportError:
-    logger.error("Error: tabulate package not found. Please install it with 'pip install tabulate'")
-    sys.exit(1)
 
+def build_parser(parser: Optional[argparse.ArgumentParser] = None) -> argparse.ArgumentParser:
+    """Create an argument parser for the list-collections command."""
+    if parser is None:
+        parser = argparse.ArgumentParser(description="List Milvus collections with detailed information")
+    else:
+        parser.description = "List Milvus collections with detailed information"
 
-def parse_args():
-    """Parse command line arguments"""
-    parser = argparse.ArgumentParser(description="List Milvus collections with detailed information")
     parser.add_argument("--host", type=str, default="127.0.0.1", help="Milvus server host")
     parser.add_argument("--port", type=str, default="19530", help="Milvus server port")
-    parser.add_argument("--format", type=str, choices=["table", "json"], default="table", 
+    parser.add_argument("--format", type=str, choices=["table", "json"], default="table",
                         help="Output format (table or json)")
-    return parser.parse_args()
+    return parser
 
 
 def connect_to_milvus(host, port):
@@ -117,10 +112,8 @@ def get_collection_info(collection_name, release=True):
                 pass
 
 
-def main():
-    """Main function"""
-    args = parse_args()
-    
+def run(args: argparse.Namespace) -> int:
+    """Execute the list-collections command."""
     # Connect to Milvus
     if not connect_to_milvus(args.host, args.port):
         return 1
@@ -177,6 +170,12 @@ def main():
             logger.info("Disconnected from Milvus server")
         except:
             pass
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    return run(args)
 
 
 if __name__ == "__main__":

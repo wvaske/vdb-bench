@@ -3,6 +3,7 @@ import logging
 import os
 import sys
 import time
+from typing import List, Optional
 
 from datetime import datetime, timedelta
 from pymilvus import connections, Collection, utility
@@ -13,19 +14,15 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
-# Add the parent directory to sys.path to import config_loader
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from vdbbench.config_loader import load_config, merge_config_with_args
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+from .config_loader import load_config, merge_config_with_args
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Monitor Milvus collection compaction process")
+def build_parser(parser: Optional[argparse.ArgumentParser] = None) -> argparse.ArgumentParser:
+    if parser is None:
+        parser = argparse.ArgumentParser(description="Monitor Milvus collection compaction process")
+    else:
+        parser.description = "Monitor Milvus collection compaction process"
+
     parser.add_argument("--host", type=str, default="127.0.0.1", help="Milvus server host")
     parser.add_argument("--port", type=str, default="19530", help="Milvus server port")
     parser.add_argument("--collection", type=str, required=False, help="Collection name to compact and monitor")
@@ -35,28 +32,7 @@ def parse_args():
                         help="Time in seconds to wait with zero pending rows before considering complete")
     parser.add_argument("--config", type=str, help="Path to YAML configuration file")
 
-    args = parser.parse_args()
-
-    # Track which arguments were explicitly set vs using defaults
-    args.is_default = {
-        'host': args.host == "127.0.0.1",
-        'port': args.port == "19530",
-        'interval': args.interval == 5,
-        'zero_threshold': args.zero_threshold == 90,
-        'compact': not args.compact  # Default is False
-    }
-
-    # Load configuration from YAML if specified
-    config = {}
-    if args.config:
-        config = load_config(args.config)
-        args = merge_config_with_args(config, args)
-
-    # Validate required parameters
-    if not args.collection:
-        parser.error("Collection name is required. Specify with --collection or in config file.")
-
-    return args
+    return parser
 
 
 def connect_to_milvus(host, port):
@@ -268,25 +244,58 @@ def monitor_progress(collection_name, interval=60, zero_threshold=300):
     
     return True
 
-def main():
-    args = parse_args()
-    
+def _compute_default_flags(parser: argparse.ArgumentParser, args: argparse.Namespace) -> dict:
+    defaults = {}
+    for action in parser._actions:
+        if not action.dest or action.dest == argparse.SUPPRESS:
+            continue
+        defaults[action.dest] = action.default
+    flags = {}
+    for dest, default_value in defaults.items():
+        if hasattr(args, dest):
+            flags[dest] = getattr(args, dest) == default_value
+    return flags
+
+
+def run(args: argparse.Namespace, parser: Optional[argparse.ArgumentParser] = None) -> int:
+    if parser is None:
+        parser = build_parser()
+
+    args.is_default = _compute_default_flags(parser, args)
+
+    # Load configuration from YAML if specified
+    if args.config:
+        config = load_config(args.config)
+        args = merge_config_with_args(config, args)
+        args.is_default = _compute_default_flags(parser, args)
+
+    # Validate required parameters
+    if not args.collection:
+        parser.error("Collection name is required. Specify with --collection or in config file.")
+
     # Connect to Milvus
     if not connect_to_milvus(args.host, args.port):
         return 1
-    
+
     # Perform compaction if requested
     if args.compact:
         if not perform_compaction(args.collection):
             return 1
-    
+
     # Monitor progress
     logging.info(f"Starting to monitor progress (checking every {args.interval} seconds)")
     if not monitor_progress(args.collection, args.interval, args.zero_threshold):
         return 1
-    
+
     logging.info("Monitoring completed successfully!")
     return 0
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    return run(args, parser)
+
 
 if __name__ == "__main__":
     sys.exit(main())
