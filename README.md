@@ -74,7 +74,7 @@ Key parameters:
 * --distribution: Distribution for vector generation (uniform, normal)
 * --batch-size: Batch size for insertion
 
-Example configuration file (vdbbench/configs/10m.yaml):
+Example configuration file (vdbbench/configs/10m_diskann.yaml):
 ```yaml
 database:
   host: 127.0.0.1
@@ -84,7 +84,7 @@ database:
   max_send_message_length: 514_983_574
 
 dataset:
-  collection_name: mlps_10m_10shards_1536dim_uniform
+  collection_name: mlps_10m_10shards_1536dim_uniform_diskann
   num_vectors: 10_000_000
   dimension: 1536
   distribution: uniform
@@ -95,9 +95,9 @@ dataset:
 index:
   index_type: DISKANN
   metric_type: COSINE
-  index_params:
-    M: 64
-    ef_construction: 200
+  #index_params
+  max_degree: 64
+  search_list_size: 200
 
 workflow:
   compact: True
@@ -121,8 +121,10 @@ You can also inspect existing collections and index information with:
 vdbbench list
 ```
 
+For comparison with HNSW indexing, use ```vdbbench/configs/10m_hnsw.yaml``` and update collection_name accordingly.
+
 ## Supported Databases
-Milvus (currently implemented)
+Milvus with DiskANN & HNSW indexing (currently implemented)
 
 # Contributing
 Contributions are welcome! Please feel free to submit a Pull Request.
