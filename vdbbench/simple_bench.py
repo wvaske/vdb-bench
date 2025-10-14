@@ -393,8 +393,11 @@ def load_database(host: str, port: str, collection_name: str, reload=False) -> U
     return collection_info
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Milvus Vector Database Benchmark")
+def build_parser(parser: Optional[argparse.ArgumentParser] = None) -> argparse.ArgumentParser:
+    if parser is None:
+        parser = argparse.ArgumentParser(description="Milvus Vector Database Benchmark")
+    else:
+        parser.description = "Milvus Vector Database Benchmark"
 
     parser.add_argument("--config", type=str, help="Path to vdbbench config file")
 
@@ -418,7 +421,12 @@ def main():
     parser.add_argument("--output-dir", type=str, help="Directory to save benchmark results")
     parser.add_argument("--json-output", action="store_true", help="Print benchmark results as JSON document")
 
-    args = parser.parse_args()
+    return parser
+
+
+def run(args: argparse.Namespace, parser: Optional[argparse.ArgumentParser] = None) -> int:
+    if parser is None:
+        parser = build_parser()
 
     # Validate termination conditions
     if args.runtime is None and args.queries is None:
@@ -480,7 +488,7 @@ def main():
         connections.disconnect("default")
     else:
         print("Unable to load the specified collection")
-        sys.exit(1)
+        return 1
 
     # Read initial disk stats
     print(f'\nCollecting initial disk statistics...')
@@ -488,6 +496,7 @@ def main():
 
     # Calculate queries per process if total queries specified
     max_queries_per_process = None
+    remainder = 0
     if args.queries is not None:
         max_queries_per_process = args.queries // args.processes
         # Add remainder to the first process
@@ -495,7 +504,7 @@ def main():
 
     # Start worker processes
     processes = []
-    stagger_interval_secs = 1 / args.processes
+    stagger_interval_secs = 1 / args.processes if args.processes else 0
 
     print("")
     print("=" * 50)
@@ -663,6 +672,14 @@ def main():
         print("\nDetailed results saved to:", output_dir)
         print("=" * 50)
 
+    return 0
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    return run(args, parser)
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

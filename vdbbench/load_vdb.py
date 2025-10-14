@@ -3,13 +3,13 @@ import logging
 import sys
 import os
 import time
+from typing import List, Optional
+
 import numpy as np
 from pymilvus import connections, Collection, FieldSchema, CollectionSchema, DataType, utility
 
-# Add the parent directory to sys.path to import config_loader
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from vdbbench.config_loader import load_config, merge_config_with_args
-from vdbbench.compact_and_watch import monitor_progress
+from .config_loader import load_config, merge_config_with_args
+from .compact_and_watch import monitor_progress
 
 # Configure logging
 logging.basicConfig(
@@ -18,13 +18,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Load vectors into Milvus database")
-    
+def build_parser(parser: Optional[argparse.ArgumentParser] = None) -> argparse.ArgumentParser:
+    if parser is None:
+        parser = argparse.ArgumentParser(description="Load vectors into Milvus database")
+    else:
+        parser.description = "Load vectors into Milvus database"
+
     # Connection parameters
     parser.add_argument("--host", type=str, default="localhost", help="Milvus server host")
     parser.add_argument("--port", type=str, default="19530", help="Milvus server port")
-    
+
     # Collection parameters
     parser.add_argument("--collection-name", type=str, help="Name of the collection to create")
     parser.add_argument("--dimension", type=int, help="Vector dimension")
@@ -32,10 +35,10 @@ def parse_args():
     parser.add_argument("--vector-dtype", type=str, default="float", choices=["FLOAT_VECTOR"],
                         help="Vector data type. Only FLOAT_VECTOR is supported for now")
     parser.add_argument("--force", action="store_true", help="Force recreate collection if it exists")
-    
+
     # Data generation parameters
     parser.add_argument("--num-vectors", type=int, help="Number of vectors to generate")
-    parser.add_argument("--distribution", type=str, default="uniform", 
+    parser.add_argument("--distribution", type=str, default="uniform",
                         choices=["uniform", "normal"], help="Distribution for vector generation")
     parser.add_argument("--batch-size", type=int, default=10000, help="Batch size for insertion")
     parser.add_argument("--chunk-size", type=int, default=1000000, help="Number of vectors to generate in each chunk (for memory management)")
@@ -47,75 +50,21 @@ def parse_args():
     parser.add_argument("--search-list-size", type=int, default=200, help="DiskANN SearchListSize parameter")
     parser.add_argument("--M", type=int, default=16, help="HNSW M parameter")
     parser.add_argument("--ef-construction", type=int, default=200, help="HNSW efConstruction parameter")
-    
+
     # Monitoring parameters
     parser.add_argument("--monitor-interval", type=int, default=5, help="Interval in seconds for monitoring index building")
     parser.add_argument("--compact", action="store_true", help="Perform compaction after loading")
-    
+
     # Configuration file
     parser.add_argument("--config", type=str, help="Path to YAML configuration file")
-    
+
     # What-if option to print args and exit
     parser.add_argument("--what-if", action="store_true", help="Print the arguments after processing and exit")
-    
+
     # Debug option to set logging level to DEBUG
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
-    
-    args = parser.parse_args()
-    
-    # Track which arguments were explicitly set vs using defaults
-    args.is_default = {
-        'host': args.host == "localhost",
-        'port': args.port == "19530",
-        'num_shards': args.num_shards == 1,
-        'vector_dtype': args.vector_dtype == "float",
-        'distribution': args.distribution == "uniform",
-        'batch_size': args.batch_size == 10000,
-        'chunk_size': args.chunk_size == 1000000,
-        'index_type': args.index_type == "DISKANN",
-        'metric_type': args.metric_type == "COSINE",
-        'max_degree': args.max_degree == 16,
-        'search_list_size': args.search_list_size == 200,
-        'M': args.M == 16,
-        'ef_construction': args.ef_construction == 200,
-        'monitor_interval': args.monitor_interval == 5,
-        'compact': not args.compact,  # Default is False
-        'force': not args.force,  # Default is False
-        'what_if': not args.what_if,  # Default is False
-        'debug': not args.debug  # Default is False
-    }
-    
-    # Set logging level to DEBUG if --debug is specified
-    if args.debug:
-        logger.setLevel(logging.DEBUG)
-        logger.debug("Debug logging enabled")
-    
-    # Load configuration from YAML if specified
-    if args.config:
-        config = load_config(args.config)
-        args = merge_config_with_args(config, args)
-    
-    # If what-if is specified, print the arguments and exit
-    if args.what_if:
-        logger.info("Running in what-if mode. Printing arguments and exiting.")
-        print("\nConfiguration after processing arguments and config file:")
-        print("=" * 60)
-        for key, value in vars(args).items():
-            if key != 'is_default':  # Skip the is_default dictionary
-                source = "default" if args.is_default.get(key, False) else "specified"
-                print(f"{key}: {value} ({source})")
-        print("=" * 60)
-        sys.exit(0)
-    
-    # Validate required parameters
-    required_params = ['collection_name', 'dimension', 'num_vectors']
-    missing_params = [param for param in required_params if getattr(args, param.replace('-', '_'), None) is None]
-    
-    if missing_params:
-        parser.error(f"Missing required parameters: {', '.join(missing_params)}. "
-                     f"Specify with command line arguments or in config file.")
-    
-    return args
+
+    return parser
 
 
 def connect_to_milvus(host, port):
@@ -248,21 +197,69 @@ def create_index(collection, index_params):
         return False
 
 
-def main():
-    args = parse_args()
+def _compute_default_flags(parser: argparse.ArgumentParser, args: argparse.Namespace) -> dict:
+    defaults = {}
+    for action in parser._actions:
+        if not action.dest or action.dest == argparse.SUPPRESS:
+            continue
+        defaults[action.dest] = action.default
+    flags = {}
+    for dest, default_value in defaults.items():
+        if hasattr(args, dest):
+            flags[dest] = getattr(args, dest) == default_value
+    return flags
+
+
+def run(args: argparse.Namespace, parser: Optional[argparse.ArgumentParser] = None) -> int:
+    if parser is None:
+        parser = build_parser()
+
+    # Track default usage for config merging
+    args.is_default = _compute_default_flags(parser, args)
+
+    # Load configuration from YAML if specified
+    if args.config:
+        config = load_config(args.config)
+        args = merge_config_with_args(config, args)
+        args.is_default = _compute_default_flags(parser, args)
+
+    # Set logging level to DEBUG if requested (after config merge to honor config values)
+    if getattr(args, "debug", False):
+        logger.setLevel(logging.DEBUG)
+        logger.debug("Debug logging enabled")
+
+    # If what-if is specified, print the arguments and exit
+    if getattr(args, "what_if", False):
+        logger.info("Running in what-if mode. Printing arguments and exiting.")
+        print("\nConfiguration after processing arguments and config file:")
+        print("=" * 60)
+        for key, value in vars(args).items():
+            if key != 'is_default':  # Skip the is_default dictionary
+                source = "default" if args.is_default.get(key, False) else "specified"
+                print(f"{key}: {value} ({source})")
+        print("=" * 60)
+        return 0
+
+    # Validate required parameters
+    required_params = ['collection_name', 'dimension', 'num_vectors']
+    missing_params = [param for param in required_params if getattr(args, param, None) is None]
+
+    if missing_params:
+        parser.error(f"Missing required parameters: {', '.join(missing_params)}. "
+                     f"Specify with command line arguments or in config file.")
 
     # Connect to Milvus
     if not connect_to_milvus(args.host, args.port):
         logger.error("Failed to connect to Milvus.")
         return 1
 
-    logger.debug(f'Determining datatype for vector representation.')
+    logger.debug('Determining datatype for vector representation.')
     # Determine vector data type
     try:
         # Check if FLOAT16 is available in newer versions of pymilvus
         if hasattr(DataType, 'FLOAT16'):
-            logger.debug(f'Using FLOAT16 data type for vector representation.")')
-            vector_dtype = DataType.FLOAT16 if args.vector_dtype == 'float16' else DataType.FLOAT_VECTOR
+            logger.debug('Using FLOAT16 data type for vector representation.')
+            vector_dtype = DataType.FLOAT16 if getattr(args, 'vector_dtype', 'float') == 'float16' else DataType.FLOAT_VECTOR
         else:
             # Fall back to supported data types
             logger.warning("FLOAT16 data type not available in this version of pymilvus. Using FLOAT_VECTOR instead.")
@@ -304,7 +301,7 @@ def main():
     else:
         raise ValueError(f"Unsupported index_type: {args.index_type}")
 
-    logger.debug(f'Creating index. This should be immediate on an empty collection')
+    logger.debug('Creating index. This should be immediate on an empty collection')
     if not create_index(collection, index_params):
         return 1
 
@@ -312,17 +309,16 @@ def main():
     logger.info(
         f"Generating {args.num_vectors} vectors with {args.dimension} dimensions using {args.distribution} distribution")
     start_gen_time = time.time()
-    
+
     # Split vector generation into chunks if num_vectors is large
     if args.num_vectors > args.chunk_size:
         logger.info(f"Large vector count detected. Generating in chunks of {args.chunk_size:,} vectors")
-        vectors = []
         remaining = args.num_vectors
         chunks_processed = 0
-        
+
         while remaining > 0:
             chunk_size = min(args.chunk_size, remaining)
-            logger.info(f"Generating chunk {chunks_processed+1}: {chunk_size:,} vectors")
+            logger.info(f"Generating chunk {chunks_processed + 1}: {chunk_size:,} vectors")
             chunk_start = time.time()
             chunk_vectors = generate_vectors(chunk_size, args.dimension, args.distribution)
             chunk_time = time.time() - chunk_start
@@ -332,7 +328,7 @@ def main():
                         f"({(args.num_vectors - remaining) / args.num_vectors * 100:.1f}%)")
 
             # Insert data
-            logger.info(f"Inserting {args.num_vectors} vectors into collection '{args.collection_name}'")
+            logger.info(f"Inserting {chunk_size} vectors into collection '{args.collection_name}'")
             total_inserted, insert_time = insert_data(collection, chunk_vectors, args.batch_size)
             logger.info(f"Inserted {total_inserted} vectors in {insert_time:.2f} seconds")
 
@@ -366,5 +362,11 @@ def main():
     return 0
 
 
+def main(argv: Optional[List[str]] = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    return run(args, parser)
+
+
 if __name__ == "__main__":
-    exit(main())
+    sys.exit(main())
