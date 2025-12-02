@@ -1,5 +1,6 @@
 # Byte-compiled / optimized / DLL files
 __pycache__/
+tests/tests/__pycache__/
 *.py[cod]
 *$py.class
 
@@ -50,6 +51,11 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
+tests/.benchmarks/
+tests/.coverage
+tests/tests/coverage_html/
+tests/tests/test_results.*
+tests/tests/test_report.*
 
 # Translations
 *.mo
